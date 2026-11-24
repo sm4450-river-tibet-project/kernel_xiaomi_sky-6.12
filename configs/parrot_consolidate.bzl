@@ -1,30 +1,33 @@
 parrot_consolidate_config = {
     # keep sorted
-    "CONFIG_ATOMIC64_SELFTEST": "m",
-    "CONFIG_CMA_DEBUGFS": "y",
-    "CONFIG_CORESIGHT_SOURCE_ETM4X": "m",
-    "CONFIG_CPU_IDLE_SIMPLE_GOV_QCOM_LPM": "m",
+    # ---- platform ----
+    # ARCH_PARROT does not exist on CLO 6.12. The board gate there is
+    # ARCH_RAVELIN (arch/arm64/Kconfig.platforms), and the SM4450 drivers
+    # are gated on it. Enabling WAIPIO/DIWALI (as the waipio-derived copy
+    # did) is wrong: those are different SoCs and pull in unrelated drivers.
+    "CONFIG_ARCH_RAVELIN": "y",
+    "CONFIG_ARCH_QCOM": "y",
+
+    # ---- debug (consolidate only) ----
     "CONFIG_DEBUG_PAGEALLOC": "y",
     "CONFIG_DEBUG_PAGEALLOC_ENABLE_DEFAULT": "y",
     "CONFIG_DEBUG_SPINLOCK": "y",
-    "CONFIG_DETECT_HUNG_TASK": "y",
-    "CONFIG_IOMMU_TLBSYNC_DEBUG": "y",
-    "CONFIG_LKDTM": "m",
-    "CONFIG_LOCK_TORTURE_TEST": "m",
-    "CONFIG_MFD_QCOM_PM8008": "m",
-    "CONFIG_MHI_BUS_DEBUG": "y",
-    "CONFIG_MSM_GPI_DMA_DEBUG": "y",
-    "CONFIG_PAGE_OWNER": "y",
-    "CONFIG_QCOM_CPU_PHYS_LOG_MAP": "n",
-    "CONFIG_QCOM_DYNAMIC_MEMORY_DUMP": "y",
-    "CONFIG_QTI_PMIC_GLINK_CLIENT_DEBUG": "y",
-    "CONFIG_RCU_TORTURE_TEST": "m",
-    "CONFIG_REGMAP_QTI_DEBUGFS_ALLOW_WRITE": "y",
-    "CONFIG_REGULATOR_QCOM_PM8008": "m",
-    "CONFIG_RUNTIME_TESTING_MENU": "y",
-    "CONFIG_SCHED_WALT": "m",
-    "CONFIG_SCHED_WALT_DEBUG": "m",
-    "CONFIG_TORTURE_TEST": "m",
     "CONFIG_UFS_DBG": "y",
-    "CONFIG_USB_LINK_LAYER_TEST": "m",
+
+    # ---- clocks: SM4450 clock controllers ----
+    "CONFIG_SM_GCC_4450": "m",
+    "CONFIG_SM_DISPCC_4450": "m",
+    "CONFIG_SM_CAMCC_4450": "m",
+    "CONFIG_SM_GPUCC_4450": "m",
+    "CONFIG_SM_DEBUGCC_4450": "m",
+
+    # ---- interconnect: ravelin NoC ----
+    "CONFIG_INTERCONNECT_QCOM_RAVELIN": "m",
+
+    # ---- pinctrl ----
+    "CONFIG_PINCTRL_RAVELIN": "m",
+
+    # ---- UFS: ravelin reuses the parrot/waipio PHY ----
+    # qcom/ravelin-qrd.dtsi: compatible = "qcom,ufs-phy-qmp-v4-waipio"
+    "CONFIG_PHY_QCOM_UFS_V4_WAIPIO": "m",
 }
