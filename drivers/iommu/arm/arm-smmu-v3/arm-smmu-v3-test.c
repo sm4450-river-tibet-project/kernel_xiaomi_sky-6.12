@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright 2024 Google LLC.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include <kunit/test.h>
 #include <linux/io-pgtable.h>
@@ -62,7 +62,7 @@ arm_smmu_test_writer_record_syncs(struct arm_smmu_entry_writer *writer)
 		GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test_writer->test, entry_used_bits);
 
-	pr_debug("STE value is now set to: ");
+	pr_debug("STE value is now set to:\n");
 	print_hex_dump_debug("    ", DUMP_PREFIX_NONE, 16, 8,
 			     test_writer->entry,
 			     NUM_ENTRY_QWORDS * sizeof(*test_writer->entry),
@@ -98,7 +98,7 @@ arm_smmu_v3_test_debug_print_used_bits(struct arm_smmu_entry_writer *writer,
 	__le64 used_bits[NUM_ENTRY_QWORDS] = {};
 
 	arm_smmu_get_ste_used(ste, used_bits);
-	pr_debug("STE used bits: ");
+	pr_debug("STE used bits:\n");
 	print_hex_dump_debug("    ", DUMP_PREFIX_NONE, 16, 8, used_bits,
 			     sizeof(used_bits), false);
 }
@@ -132,11 +132,11 @@ static void arm_smmu_v3_test_ste_expect_transition(
 
 	};
 
-	pr_debug("STE initial value: ");
+	pr_debug("STE initial value:\n");
 	print_hex_dump_debug("    ", DUMP_PREFIX_NONE, 16, 8, cur_copy.data,
 			     sizeof(cur_copy), false);
 	arm_smmu_v3_test_debug_print_used_bits(&test_writer.writer, cur->data);
-	pr_debug("STE target value: ");
+	pr_debug("STE target value:\n");
 	print_hex_dump_debug("    ", DUMP_PREFIX_NONE, 16, 8, target->data,
 			     sizeof(cur_copy), false);
 	arm_smmu_v3_test_debug_print_used_bits(&test_writer.writer,
@@ -416,11 +416,11 @@ static void arm_smmu_v3_test_cd_expect_transition(
 
 	};
 
-	pr_debug("CD initial value: ");
+	pr_debug("CD initial value:\n");
 	print_hex_dump_debug("    ", DUMP_PREFIX_NONE, 16, 8, cur_copy.data,
 			     sizeof(cur_copy), false);
 	arm_smmu_v3_test_debug_print_used_bits(&test_writer.writer, cur->data);
-	pr_debug("CD target value: ");
+	pr_debug("CD target value:\n");
 	print_hex_dump_debug("    ", DUMP_PREFIX_NONE, 16, 8, target->data,
 			     sizeof(cur_copy), false);
 	arm_smmu_v3_test_debug_print_used_bits(&test_writer.writer,
@@ -609,4 +609,4 @@ kunit_test_suites(&arm_smmu_v3_test_module);
 
 MODULE_IMPORT_NS(EXPORTED_FOR_KUNIT_TESTING);
 MODULE_DESCRIPTION("KUnit tests for arm-smmu-v3 driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

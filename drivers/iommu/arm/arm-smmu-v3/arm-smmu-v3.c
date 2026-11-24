@@ -2,11 +2,11 @@
 /*
  * IOMMU API for ARM architected SMMUv3 implementations.
  *
- * Copyright (C) 2015 ARM Limited
- *
  * Author: Will Deacon <will.deacon@arm.com>
  *
  * This driver is powered by bad coffee and bombay mix.
+ *
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/acpi_iort.h>
@@ -21,16 +21,18 @@
 #include <linux/platform_device.h>
 #include <kunit/visibility.h>
 #include <uapi/linux/iommufd.h>
+#include <linux/virtio.h>
+#include <linux/virtio_config.h>
+#include <linux/virtio_ids.h>
 
 #include "arm-smmu-v3.h"
-#include "../../dma-iommu.h"
+#include "drivers/iommu/dma-iommu.h"
 
 static bool disable_msipolling;
 module_param(disable_msipolling, bool, 0444);
 MODULE_PARM_DESC(disable_msipolling,
 	"Disable MSI-based polling for CMD_SYNC completion.");
 
-static struct iommu_ops arm_smmu_ops;
 static struct iommu_dirty_ops arm_smmu_dirty_ops;
 
 #define NUM_ENTRY_QWORDS 8
@@ -43,108 +45,6 @@ DEFINE_MUTEX(arm_smmu_asid_lock);
 static int arm_smmu_domain_finalise(struct arm_smmu_domain *smmu_domain,
 				    struct arm_smmu_device *smmu, u32 flags);
 static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master);
-
-/* High-level queue accessors */
-static int arm_smmu_cmdq_build_cmd(u64 *cmd, struct arm_smmu_cmdq_ent *ent)
-{
-	memset(cmd, 0, 1 << CMDQ_ENT_SZ_SHIFT);
-	cmd[0] |= FIELD_PREP(CMDQ_0_OP, ent->opcode);
-
-	switch (ent->opcode) {
-	case CMDQ_OP_TLBI_EL2_ALL:
-	case CMDQ_OP_TLBI_NSNH_ALL:
-		break;
-	case CMDQ_OP_PREFETCH_CFG:
-		cmd[0] |= FIELD_PREP(CMDQ_PREFETCH_0_SID, ent->prefetch.sid);
-		break;
-	case CMDQ_OP_CFGI_CD:
-		cmd[0] |= FIELD_PREP(CMDQ_CFGI_0_SSID, ent->cfgi.ssid);
-		fallthrough;
-	case CMDQ_OP_CFGI_STE:
-		cmd[0] |= FIELD_PREP(CMDQ_CFGI_0_SID, ent->cfgi.sid);
-		cmd[1] |= FIELD_PREP(CMDQ_CFGI_1_LEAF, ent->cfgi.leaf);
-		break;
-	case CMDQ_OP_CFGI_CD_ALL:
-		cmd[0] |= FIELD_PREP(CMDQ_CFGI_0_SID, ent->cfgi.sid);
-		break;
-	case CMDQ_OP_CFGI_ALL:
-		/* Cover the entire SID range */
-		cmd[1] |= FIELD_PREP(CMDQ_CFGI_1_RANGE, 31);
-		break;
-	case CMDQ_OP_TLBI_NH_VA:
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_VMID, ent->tlbi.vmid);
-		fallthrough;
-	case CMDQ_OP_TLBI_EL2_VA:
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_NUM, ent->tlbi.num);
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_SCALE, ent->tlbi.scale);
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_ASID, ent->tlbi.asid);
-		cmd[1] |= FIELD_PREP(CMDQ_TLBI_1_LEAF, ent->tlbi.leaf);
-		cmd[1] |= FIELD_PREP(CMDQ_TLBI_1_TTL, ent->tlbi.ttl);
-		cmd[1] |= FIELD_PREP(CMDQ_TLBI_1_TG, ent->tlbi.tg);
-		cmd[1] |= ent->tlbi.addr & CMDQ_TLBI_1_VA_MASK;
-		break;
-	case CMDQ_OP_TLBI_S2_IPA:
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_NUM, ent->tlbi.num);
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_SCALE, ent->tlbi.scale);
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_VMID, ent->tlbi.vmid);
-		cmd[1] |= FIELD_PREP(CMDQ_TLBI_1_LEAF, ent->tlbi.leaf);
-		cmd[1] |= FIELD_PREP(CMDQ_TLBI_1_TTL, ent->tlbi.ttl);
-		cmd[1] |= FIELD_PREP(CMDQ_TLBI_1_TG, ent->tlbi.tg);
-		cmd[1] |= ent->tlbi.addr & CMDQ_TLBI_1_IPA_MASK;
-		break;
-	case CMDQ_OP_TLBI_NH_ASID:
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_ASID, ent->tlbi.asid);
-		fallthrough;
-	case CMDQ_OP_TLBI_S12_VMALL:
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_VMID, ent->tlbi.vmid);
-		break;
-	case CMDQ_OP_TLBI_EL2_ASID:
-		cmd[0] |= FIELD_PREP(CMDQ_TLBI_0_ASID, ent->tlbi.asid);
-		break;
-	case CMDQ_OP_ATC_INV:
-		cmd[0] |= FIELD_PREP(CMDQ_0_SSV, ent->substream_valid);
-		cmd[0] |= FIELD_PREP(CMDQ_ATC_0_GLOBAL, ent->atc.global);
-		cmd[0] |= FIELD_PREP(CMDQ_ATC_0_SSID, ent->atc.ssid);
-		cmd[0] |= FIELD_PREP(CMDQ_ATC_0_SID, ent->atc.sid);
-		cmd[1] |= FIELD_PREP(CMDQ_ATC_1_SIZE, ent->atc.size);
-		cmd[1] |= ent->atc.addr & CMDQ_ATC_1_ADDR_MASK;
-		break;
-	case CMDQ_OP_PRI_RESP:
-		cmd[0] |= FIELD_PREP(CMDQ_0_SSV, ent->substream_valid);
-		cmd[0] |= FIELD_PREP(CMDQ_PRI_0_SSID, ent->pri.ssid);
-		cmd[0] |= FIELD_PREP(CMDQ_PRI_0_SID, ent->pri.sid);
-		cmd[1] |= FIELD_PREP(CMDQ_PRI_1_GRPID, ent->pri.grpid);
-		switch (ent->pri.resp) {
-		case PRI_RESP_DENY:
-		case PRI_RESP_FAIL:
-		case PRI_RESP_SUCC:
-			break;
-		default:
-			return -EINVAL;
-		}
-		cmd[1] |= FIELD_PREP(CMDQ_PRI_1_RESP, ent->pri.resp);
-		break;
-	case CMDQ_OP_RESUME:
-		cmd[0] |= FIELD_PREP(CMDQ_RESUME_0_SID, ent->resume.sid);
-		cmd[0] |= FIELD_PREP(CMDQ_RESUME_0_RESP, ent->resume.resp);
-		cmd[1] |= FIELD_PREP(CMDQ_RESUME_1_STAG, ent->resume.stag);
-		break;
-	case CMDQ_OP_CMD_SYNC:
-		if (ent->sync.msiaddr) {
-			cmd[0] |= FIELD_PREP(CMDQ_SYNC_0_CS, CMDQ_SYNC_0_CS_IRQ);
-			cmd[1] |= ent->sync.msiaddr & CMDQ_SYNC_1_MSIADDR_MASK;
-		} else {
-			cmd[0] |= FIELD_PREP(CMDQ_SYNC_0_CS, CMDQ_SYNC_0_CS_SEV);
-		}
-		cmd[0] |= FIELD_PREP(CMDQ_SYNC_0_MSH, ARM_SMMU_SH_ISH);
-		cmd[0] |= FIELD_PREP(CMDQ_SYNC_0_MSIATTR, ARM_SMMU_MEMATTR_OIWB);
-		break;
-	default:
-		return -ENOENT;
-	}
-
-	return 0;
-}
 
 static struct arm_smmu_cmdq *arm_smmu_get_cmdq(struct arm_smmu_device *smmu,
 					       struct arm_smmu_cmdq_ent *ent)
@@ -324,7 +224,7 @@ static bool arm_smmu_cmdq_shared_tryunlock(struct arm_smmu_cmdq *cmdq)
  * itself, but is responsible for advancing the hardware prod pointer when
  * the time comes. The algorithm is roughly:
  *
- * 	1. Allocate some space in the queue. At this point we also discover
+ *	1. Allocate some space in the queue. At this point we also discover
  *	   whether the head of the queue is currently owned by another CPU,
  *	   or whether we are the owner.
  *
@@ -500,12 +400,12 @@ static int __arm_smmu_cmdq_poll_until_consumed(struct arm_smmu_device *smmu,
 		 * CPU 0		CPU1			CPU2 (us)
 		 *
 		 * if (sync)
-		 * 	shared_lock();
+		 *	shared_lock();
 		 *
 		 * dma_wmb();
 		 * set_valid_map();
 		 *
-		 * 			if (owner) {
+		 *			if (owner) {
 		 *				poll_valid_map();
 		 *				<control dependency>
 		 *				writel(prod_reg);
@@ -575,6 +475,9 @@ static int arm_smmu_cmdq_issue_cmdlist(struct arm_smmu_device *smmu,
 	bool owner;
 	struct arm_smmu_ll_queue llq, head;
 	int ret = 0;
+
+	if (smmu->impl_ops && smmu->impl_ops->cmdq_issue_cmdlist)
+		return smmu->impl_ops->cmdq_issue_cmdlist(smmu, cmds, n, sync);
 
 	llq.max_n_shift = cmdq->q.llq.max_n_shift;
 
@@ -1008,6 +911,10 @@ static void arm_smmu_sync_cd(struct arm_smmu_master *master,
 		},
 	};
 
+	if (smmu->impl_ops && smmu->impl_ops->sync_cd) {
+		smmu->impl_ops->sync_cd(master, ssid, leaf);
+		return;
+	}
 	arm_smmu_cmdq_batch_init(smmu, &cmds, &cmd);
 	for (i = 0; i < master->num_streams; i++) {
 		cmd.cfgi.sid = master->streams[i].id;
@@ -1531,7 +1438,7 @@ static int arm_smmu_streams_cmp_node(struct rb_node *lhs,
 		&rb_entry(lhs, struct arm_smmu_stream, node)->id, rhs);
 }
 
-static struct arm_smmu_master *
+struct arm_smmu_master *
 arm_smmu_find_master(struct arm_smmu_device *smmu, u32 sid)
 {
 	struct rb_node *node;
@@ -1636,7 +1543,7 @@ static irqreturn_t arm_smmu_evtq_thread(int irq, void *dev)
 		 * trying harder.
 		 */
 		if (queue_sync_prod_in(q) == -EOVERFLOW)
-			dev_err(smmu->dev, "EVTQ overflow detected -- events lost\n");
+			dev_err(smmu->dev, "EVTQ overflow detected -- events missed\n");
 	} while (!queue_empty(llq));
 
 	/* Sync our overflow flag, as we believe we're up to speed */
@@ -1694,7 +1601,7 @@ static irqreturn_t arm_smmu_priq_thread(int irq, void *dev)
 			arm_smmu_handle_ppr(smmu, evt);
 
 		if (queue_sync_prod_in(q) == -EOVERFLOW)
-			dev_err(smmu->dev, "PRIQ overflow detected -- requests lost\n");
+			dev_err(smmu->dev, "PRIQ overflow detected -- requests missed\n");
 	} while (!queue_empty(llq));
 
 	/* Sync our overflow flag, as we believe we're up to speed */
@@ -1736,10 +1643,10 @@ static irqreturn_t arm_smmu_gerror_handler(int irq, void *dev)
 		dev_warn(smmu->dev, "CMDQ MSI write aborted\n");
 
 	if (active & GERROR_PRIQ_ABT_ERR)
-		dev_err(smmu->dev, "PRIQ write aborted -- events may have been lost\n");
+		dev_err(smmu->dev, "PRIQ write aborted -- events may have been missed\n");
 
 	if (active & GERROR_EVTQ_ABT_ERR)
-		dev_err(smmu->dev, "EVTQ write aborted -- events may have been lost\n");
+		dev_err(smmu->dev, "EVTQ write aborted -- events may have been missed\n");
 
 	if (active & GERROR_CMDQ_ERR)
 		arm_smmu_cmdq_skip_err(smmu);
@@ -1910,6 +1817,11 @@ static void arm_smmu_tlb_inv_context(void *cookie)
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
 	struct arm_smmu_cmdq_ent cmd;
 
+	if (smmu->impl_ops && smmu->impl_ops->tlb_inv_context) {
+		smmu->impl_ops->tlb_inv_context(smmu, smmu_domain);
+		return;
+	}
+
 	/*
 	 * NOTE: when io-pgtable is in non-strict mode, we may get here with
 	 * PTEs previously cleared by unmaps on the current CPU not yet visible
@@ -1927,74 +1839,31 @@ static void arm_smmu_tlb_inv_context(void *cookie)
 	arm_smmu_atc_inv_domain(smmu_domain, 0, 0);
 }
 
+static void __arm_smmu_cmdq_batch_add(void *__opaque,
+				      struct arm_smmu_cmdq_batch *cmds,
+				      struct arm_smmu_cmdq_ent *cmd)
+{
+	struct arm_smmu_device *smmu = (struct arm_smmu_device *)__opaque;
+
+	arm_smmu_cmdq_batch_add(smmu, cmds, cmd);
+}
+
 static void __arm_smmu_tlb_inv_range(struct arm_smmu_cmdq_ent *cmd,
 				     unsigned long iova, size_t size,
 				     size_t granule,
 				     struct arm_smmu_domain *smmu_domain)
 {
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
-	unsigned long end = iova + size, num_pages = 0, tg = 0;
-	size_t inv_range = granule;
 	struct arm_smmu_cmdq_batch cmds;
 
 	if (!size)
 		return;
 
-	if (smmu->features & ARM_SMMU_FEAT_RANGE_INV) {
-		/* Get the leaf page size */
-		tg = __ffs(smmu_domain->domain.pgsize_bitmap);
-
-		num_pages = size >> tg;
-
-		/* Convert page size of 12,14,16 (log2) to 1,2,3 */
-		cmd->tlbi.tg = (tg - 10) / 2;
-
-		/*
-		 * Determine what level the granule is at. For non-leaf, both
-		 * io-pgtable and SVA pass a nominal last-level granule because
-		 * they don't know what level(s) actually apply, so ignore that
-		 * and leave TTL=0. However for various errata reasons we still
-		 * want to use a range command, so avoid the SVA corner case
-		 * where both scale and num could be 0 as well.
-		 */
-		if (cmd->tlbi.leaf)
-			cmd->tlbi.ttl = 4 - ((ilog2(granule) - 3) / (tg - 3));
-		else if ((num_pages & CMDQ_TLBI_RANGE_NUM_MAX) == 1)
-			num_pages++;
-	}
-
 	arm_smmu_cmdq_batch_init(smmu, &cmds, cmd);
-
-	while (iova < end) {
-		if (smmu->features & ARM_SMMU_FEAT_RANGE_INV) {
-			/*
-			 * On each iteration of the loop, the range is 5 bits
-			 * worth of the aligned size remaining.
-			 * The range in pages is:
-			 *
-			 * range = (num_pages & (0x1f << __ffs(num_pages)))
-			 */
-			unsigned long scale, num;
-
-			/* Determine the power of 2 multiple number of pages */
-			scale = __ffs(num_pages);
-			cmd->tlbi.scale = scale;
-
-			/* Determine how many chunks of 2^scale size we have */
-			num = (num_pages >> scale) & CMDQ_TLBI_RANGE_NUM_MAX;
-			cmd->tlbi.num = num - 1;
-
-			/* range is num * 2^scale * pgsize */
-			inv_range = num << (scale + tg);
-
-			/* Clear out the lower order bits for the next iteration */
-			num_pages -= num << scale;
-		}
-
-		cmd->tlbi.addr = iova;
-		arm_smmu_cmdq_batch_add(smmu, &cmds, cmd);
-		iova += inv_range;
-	}
+	arm_smmu_tlb_inv_build(cmd, iova, size, granule,
+			       smmu_domain->domain.pgsize_bitmap,
+			       smmu->features & ARM_SMMU_FEAT_RANGE_INV,
+			       smmu, __arm_smmu_cmdq_batch_add, &cmds);
 	arm_smmu_cmdq_batch_submit(smmu, &cmds);
 }
 
@@ -2002,12 +1871,18 @@ static void arm_smmu_tlb_inv_range_domain(unsigned long iova, size_t size,
 					  size_t granule, bool leaf,
 					  struct arm_smmu_domain *smmu_domain)
 {
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
 	struct arm_smmu_cmdq_ent cmd = {
 		.tlbi = {
 			.leaf	= leaf,
 		},
 	};
 
+	if (smmu->impl_ops && smmu->impl_ops->tlb_inv_range) {
+		smmu->impl_ops->tlb_inv_range(smmu, smmu_domain, iova, size, granule, leaf,
+					smmu_domain->cd.asid);
+		return;
+	}
 	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
 		cmd.opcode	= smmu_domain->smmu->features & ARM_SMMU_FEAT_E2H ?
 				  CMDQ_OP_TLBI_EL2_VA : CMDQ_OP_TLBI_NH_VA;
@@ -2029,6 +1904,7 @@ void arm_smmu_tlb_inv_range_asid(unsigned long iova, size_t size, int asid,
 				 size_t granule, bool leaf,
 				 struct arm_smmu_domain *smmu_domain)
 {
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
 	struct arm_smmu_cmdq_ent cmd = {
 		.opcode	= smmu_domain->smmu->features & ARM_SMMU_FEAT_E2H ?
 			  CMDQ_OP_TLBI_EL2_VA : CMDQ_OP_TLBI_NH_VA,
@@ -2037,6 +1913,11 @@ void arm_smmu_tlb_inv_range_asid(unsigned long iova, size_t size, int asid,
 			.leaf	= leaf,
 		},
 	};
+	if (smmu->impl_ops && smmu->impl_ops->tlb_inv_range) {
+		smmu->impl_ops->tlb_inv_range(smmu, smmu_domain, iova, size, granule, leaf, asid);
+		return;
+	}
+
 
 	__arm_smmu_tlb_inv_range(&cmd, iova, size, granule, smmu_domain);
 }
@@ -2102,6 +1983,7 @@ struct arm_smmu_domain *arm_smmu_domain_alloc(void)
 	INIT_LIST_HEAD(&smmu_domain->devices);
 	spin_lock_init(&smmu_domain->devices_lock);
 
+	spin_lock_init(&smmu_domain->virtio.lock);
 	return smmu_domain;
 }
 
@@ -2146,6 +2028,7 @@ static void arm_smmu_domain_free_paging(struct iommu_domain *domain)
 		mutex_unlock(&arm_smmu_asid_lock);
 	} else {
 		struct arm_smmu_s2_cfg *cfg = &smmu_domain->s2_cfg;
+
 		if (cfg->vmid)
 			ida_free(&smmu->vmid_map, cfg->vmid);
 	}
@@ -2255,8 +2138,7 @@ static int arm_smmu_domain_finalise(struct arm_smmu_domain *smmu_domain,
 	return 0;
 }
 
-static struct arm_smmu_ste *
-arm_smmu_get_step_for_sid(struct arm_smmu_device *smmu, u32 sid)
+struct arm_smmu_ste *arm_smmu_get_step_for_sid(struct arm_smmu_device *smmu, u32 sid)
 {
 	struct arm_smmu_strtab_cfg *cfg = &smmu->strtab_cfg;
 
@@ -2264,9 +2146,11 @@ arm_smmu_get_step_for_sid(struct arm_smmu_device *smmu, u32 sid)
 		/* Two-level walk */
 		return &cfg->l2.l2ptrs[arm_smmu_strtab_l1_idx(sid)]
 				->stes[arm_smmu_strtab_l2_idx(sid)];
+
 	} else {
 		/* Simple linear lookup */
 		return &cfg->linear.table[sid];
+
 	}
 }
 
@@ -2565,9 +2449,9 @@ static void arm_smmu_attach_commit(struct arm_smmu_attach_state *state)
 		/* ATS is being switched off, invalidate the entire ATC */
 		arm_smmu_atc_inv_master(master, IOMMU_NO_PASID);
 	}
+	master->ats_enabled = state->ats_enabled;
 
 	arm_smmu_remove_master_domain(master, state->old_domain, state->ssid);
-	master->ats_enabled = state->ats_enabled;
 }
 
 static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
@@ -2592,9 +2476,9 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 
 	mutex_lock(&smmu_domain->init_mutex);
 
-	if (!smmu_domain->smmu) {
+	if (!smmu_domain->smmu)
 		ret = arm_smmu_domain_finalise(smmu_domain, smmu, 0);
-	} else if (smmu_domain->smmu != smmu)
+	else if (smmu_domain->smmu != smmu)
 		ret = -EINVAL;
 
 	mutex_unlock(&smmu_domain->init_mutex);
@@ -2622,6 +2506,8 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 		return ret;
 	}
 
+	master->domain = smmu_domain;
+
 	switch (smmu_domain->stage) {
 	case ARM_SMMU_DOMAIN_S1: {
 		struct arm_smmu_cd target_cd;
@@ -2642,9 +2528,21 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 		break;
 	}
 
+	if (smmu->impl_ops && smmu->impl_ops->install_ste) {
+		ret = smmu->impl_ops->install_ste(master, master->domain, NULL);
+		if (ret) {
+			master->domain = NULL;
+			arm_smmu_install_ste_for_dev(master, &target);
+			goto out_unlock;
+		}
+	}
 	arm_smmu_attach_commit(&state);
 	mutex_unlock(&arm_smmu_asid_lock);
 	return 0;
+
+out_unlock:
+	mutex_unlock(&smmu_domain->init_mutex);
+	return ret;
 }
 
 static int arm_smmu_s1_set_dev_pasid(struct iommu_domain *domain,
@@ -2962,13 +2860,25 @@ arm_smmu_iova_to_phys(struct iommu_domain *domain, dma_addr_t iova)
 
 static struct platform_driver arm_smmu_driver;
 
-static
-struct arm_smmu_device *arm_smmu_get_by_fwnode(struct fwnode_handle *fwnode)
+static struct arm_smmu_device *arm_smmu_get_by_fwnode(struct fwnode_handle *fwnode)
 {
 	struct device *dev = driver_find_device_by_fwnode(&arm_smmu_driver.driver,
 							  fwnode);
+	if (dev) {
+		put_device(dev);
+		return dev_get_drvdata(dev);
+	}
+
+#ifdef CONFIG_ARM_SMMU_V3_QCOM_VIRTIO
+	dev = driver_find_device_by_fwnode(&arm_vsmmu_driver.driver, fwnode);
+#endif
+	if (!dev) {
+		pr_err("%s: Couldn't find device\n", __func__);
+		return NULL;
+	}
+
 	put_device(dev);
-	return dev ? dev_get_drvdata(dev) : NULL;
+	return dev_get_drvdata(dev);
 }
 
 static bool arm_smmu_sid_in_range(struct arm_smmu_device *smmu, u32 sid)
@@ -3007,7 +2917,6 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 	mutex_lock(&smmu->streams_mutex);
 	for (i = 0; i < fwspec->num_ids; i++) {
 		struct arm_smmu_stream *new_stream = &master->streams[i];
-		struct rb_node *existing;
 		u32 sid = fwspec->ids[i];
 
 		new_stream->id = sid;
@@ -3018,20 +2927,10 @@ static int arm_smmu_insert_master(struct arm_smmu_device *smmu,
 			break;
 
 		/* Insert into SID tree */
-		existing = rb_find_add(&new_stream->node, &smmu->streams,
-				       arm_smmu_streams_cmp_node);
-		if (existing) {
-			struct arm_smmu_master *existing_master =
-				rb_entry(existing, struct arm_smmu_stream, node)
-					->master;
-
-			/* Bridged PCI devices may end up with duplicated IDs */
-			if (existing_master == master)
-				continue;
-
-			dev_warn(master->dev,
-				 "stream %u already in tree from dev %s\n", sid,
-				 dev_name(existing_master->dev));
+		if (rb_find_add(&new_stream->node, &smmu->streams,
+				arm_smmu_streams_cmp_node)) {
+			dev_warn(master->dev, "stream %u already in tree\n",
+				 sid);
 			ret = -EINVAL;
 			break;
 		}
@@ -3077,6 +2976,12 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 	smmu = arm_smmu_get_by_fwnode(fwspec->iommu_fwnode);
 	if (!smmu)
 		return ERR_PTR(-ENODEV);
+
+	if (smmu->impl_ops && smmu->impl_ops->probe_device) {
+		ret = smmu->impl_ops->probe_device(smmu, dev);
+		if (ret)
+			return ERR_PTR(ret);
+	}
 
 	master = kzalloc(sizeof(*master), GFP_KERNEL);
 	if (!master)
@@ -3253,7 +3158,7 @@ static int arm_smmu_def_domain_type(struct device *dev)
 	return 0;
 }
 
-static struct iommu_ops arm_smmu_ops = {
+struct iommu_ops arm_smmu_ops = {
 	.identity_domain	= &arm_smmu_identity_domain,
 	.blocked_domain		= &arm_smmu_blocked_domain,
 	.capable		= arm_smmu_capable,
@@ -3345,12 +3250,14 @@ static int arm_smmu_init_queues(struct arm_smmu_device *smmu)
 				       PRIQ_ENT_DWORDS, "priq");
 }
 
-static int arm_smmu_init_structures(struct arm_smmu_device *smmu)
+int arm_smmu_init_structures(struct arm_smmu_device *smmu)
 {
 	int ret;
 
-	mutex_init(&smmu->streams_mutex);
-	smmu->streams = RB_ROOT;
+	if (!(smmu->options & ARM_SMMU_OPT_VIRTIO)) {
+		mutex_init(&smmu->streams_mutex);
+		smmu->streams = RB_ROOT;
+	}
 
 	ret = arm_smmu_init_queues(smmu);
 	if (ret)
@@ -3677,10 +3584,18 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 
 	arm_smmu_probe_irq(pdev, smmu);
 
+	smmu->pwr = arm_smmu_init_power_resources(dev);
+	if (IS_ERR(smmu->pwr))
+		return PTR_ERR(smmu->pwr);
+
+	ret = arm_smmu_power_on(smmu->pwr);
+	if (ret)
+		return ret;
+
 	/* Probe the h/w */
 	ret = arm_smmu_device_hw_probe(smmu);
 	if (ret)
-		return ret;
+		goto out_power_off;
 
 	if (arm_smmu_sva_supported(smmu))
 		smmu->features |= ARM_SMMU_FEAT_SVA;
@@ -3709,13 +3624,15 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_disable;
 
-	/* And we're up. Go go go! */
+	/* And we're up. Go go ! */
 	return arm_smmu_register_iommu(smmu, &arm_smmu_ops, ioaddr);
 
 err_disable:
 	arm_smmu_device_disable(smmu);
 err_free_iopf:
 	iopf_queue_free(smmu->evtq.iopf);
+out_power_off:
+	arm_smmu_power_off(smmu, smmu->pwr);
 	return ret;
 }
 
@@ -3758,10 +3675,31 @@ static struct platform_driver arm_smmu_driver = {
 	.remove_new = arm_smmu_device_remove,
 	.shutdown = arm_smmu_device_shutdown,
 };
-module_driver(arm_smmu_driver, platform_driver_register,
-	      arm_smmu_driver_unregister);
+
+
+static int __init arm_smmu_driver_init(void)
+{
+	int ret;
+
+	ret = platform_driver_register(&arm_smmu_driver);
+	if (ret)
+		return ret;
+	ret = arm_smmu_qcom_virtio_init();
+	if (ret) {
+		arm_smmu_driver_unregister(&arm_smmu_driver);
+		return ret;
+	}
+	return 0;
+}
+module_init(arm_smmu_driver_init);
+
+static void __exit arm_smmu_driver_exit(void)
+{
+	arm_smmu_qcom_virtio_exit();
+	arm_smmu_driver_unregister(&arm_smmu_driver);
+}
+module_exit(arm_smmu_driver_exit);
 
 MODULE_DESCRIPTION("IOMMU API for ARM architected SMMUv3 implementations");
-MODULE_AUTHOR("Will Deacon <will@kernel.org>");
 MODULE_ALIAS("platform:arm-smmu-v3");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

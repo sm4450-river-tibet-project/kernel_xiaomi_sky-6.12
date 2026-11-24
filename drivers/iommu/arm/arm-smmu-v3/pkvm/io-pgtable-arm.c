@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022 Arm Ltd.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include <asm/kvm_hyp.h>
 #include <asm/kvm_mmu.h>
@@ -11,6 +11,7 @@
 #include <nvhe/alloc.h>
 #include <nvhe/iommu.h>
 #include <nvhe/mem_protect.h>
+#include <nvhe/serial.h>
 
 #include "arm_smmu_v3.h"
 #include "arm-smmu-v3-module.h"
@@ -98,28 +99,32 @@ static int kvm_arm_io_pgtable_init(struct io_pgtable_cfg *cfg,
 
 struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 					    void *cookie,
-					    int *out_ret)
+					    int *out_ret, bool idmapped)
 {
 	size_t pgd_size, alignment;
 	struct arm_lpae_io_pgtable *data;
 	int ret;
 
-	data = hyp_alloc(sizeof(*data));
+	data = kvm_iommu_donate_pages_atomic(0);
 	if (!data) {
-		*out_ret = hyp_alloc_errno();
+		*out_ret = -ENOMEM;
 		return NULL;
 	}
 
+	data->idmapped = idmapped;
 	ret = kvm_arm_io_pgtable_init(cfg, data);
 	if (ret)
 		goto out_free;
 
 	pgd_size = PAGE_ALIGN(ARM_LPAE_PGD_SIZE(data));
+
+	data->idmapped = idmapped;
 	data->pgd = __arm_lpae_alloc_pages(pgd_size, 0, &data->iop.cfg, cookie);
 	if (!data->pgd) {
 		ret = -ENOMEM;
 		goto out_free;
 	}
+
 	/*
 	 * If it has eight or more entries, the table must be aligned on
 	 * its size. Otherwise 64 bytes.
@@ -147,7 +152,6 @@ struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 	*out_ret = 0;
 	return &data->iop;
 out_free:
-	hyp_free(data);
 	*out_ret = ret;
 	return NULL;
 }

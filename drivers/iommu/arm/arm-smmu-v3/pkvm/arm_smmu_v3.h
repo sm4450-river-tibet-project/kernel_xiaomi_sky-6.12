@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ */
 #ifndef __KVM_ARM_SMMU_V3_H
 #define __KVM_ARM_SMMU_V3_H
 
@@ -21,7 +24,7 @@ struct hyp_arm_smmu_v3_device {
 
 	void __iomem		*base;
 	u32			cmdq_prod;
-	__le64			*cmdq_base;
+	u64			*cmdq_base;
 	size_t			cmdq_log2size;
 	/* strtab_cfg.l2.l2ptrs is not used, instead computed from L1 */
 	struct arm_smmu_strtab_cfg strtab_cfg;
@@ -29,6 +32,8 @@ struct hyp_arm_smmu_v3_device {
 	size_t			ias;
 	size_t			pgsize_bitmap;
 	size_t			ssid_bits;
+	unsigned long		evtq_base;
+	unsigned long		priq_base;
 };
 
 extern size_t kvm_nvhe_sym(kvm_hyp_arm_smmu_v3_count);
@@ -44,7 +49,6 @@ enum kvm_arm_smmu_domain_type {
 	KVM_ARM_SMMU_DOMAIN_S2,
 	KVM_ARM_SMMU_DOMAIN_MAX,
 };
-
-extern struct kvm_iommu_ops smmu_ops;
+int smmuv3_hyp_nesting_init(void);
 
 #endif /* __KVM_ARM_SMMU_V3_H */

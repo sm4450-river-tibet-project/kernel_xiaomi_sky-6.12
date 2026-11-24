@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 /*
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _DT_BINDINGS_CLK_QCOM_GCC_X1E80100_H
@@ -363,6 +363,44 @@
 #define GCC_USB3_PRIM_PHY_PIPE_CLK_SRC				353
 #define GCC_USB3_SEC_PHY_PIPE_CLK_SRC				354
 #define GCC_USB3_TERT_PHY_PIPE_CLK_SRC				355
+#define GCC_GPU_SMMU_VOTE_CLK					356
+#define GCC_MMU_TCU_VOTE_CLK					357
+#define GCC_PCIE_3_PHY_AUX_CLK_SRC				358
+#define GCC_PCIE_6A_PHY_AUX_CLK_SRC				359
+#define GCC_PCIE_6B_PHY_AUX_CLK_SRC				360
+#define GCC_UFS_PHY_RX_SYMBOL_0_CLK_SRC				361
+#define GCC_UFS_PHY_RX_SYMBOL_1_CLK_SRC				362
+#define GCC_UFS_PHY_TX_SYMBOL_0_CLK_SRC				363
+#define GCC_USB34_PRIM_PHY_PIPE_CLK_SRC				364
+#define GCC_USB34_SEC_PHY_PIPE_CLK_SRC				365
+#define GCC_USB34_TERT_PHY_PIPE_CLK_SRC				366
+#define GCC_USB3_MP_PHY_PIPE_0_CLK_SRC				367
+#define GCC_USB3_MP_PHY_PIPE_1_CLK_SRC				368
+#define GCC_USB4_0_PHY_DP0_CLK_SRC				369
+#define GCC_USB4_0_PHY_DP1_CLK_SRC				370
+#define GCC_USB4_0_PHY_P2RR2P_PIPE_CLK_SRC			371
+#define GCC_USB4_0_PHY_PCIE_PIPE_MUX_CLK_SRC			372
+#define GCC_USB4_0_PHY_RX0_CLK_SRC				373
+#define GCC_USB4_0_PHY_RX1_CLK_SRC				374
+#define GCC_USB4_0_PHY_SYS_CLK_SRC				375
+#define GCC_USB4_1_PHY_DP0_CLK_SRC				376
+#define GCC_USB4_1_PHY_DP1_CLK_SRC				377
+#define GCC_USB4_1_PHY_P2RR2P_PIPE_CLK_SRC			378
+#define GCC_USB4_1_PHY_PCIE_PIPE_MUX_CLK_SRC			379
+#define GCC_USB4_1_PHY_RX0_CLK_SRC				380
+#define GCC_USB4_1_PHY_RX1_CLK_SRC				381
+#define GCC_USB4_1_PHY_SYS_CLK_SRC				382
+#define GCC_USB4_2_PHY_DP0_CLK_SRC				383
+#define GCC_USB4_2_PHY_DP1_CLK_SRC				384
+#define GCC_USB4_2_PHY_P2RR2P_PIPE_CLK_SRC			385
+#define GCC_USB4_2_PHY_PCIE_PIPE_MUX_CLK_SRC			386
+#define GCC_USB4_2_PHY_RX0_CLK_SRC				387
+#define GCC_USB4_2_PHY_RX1_CLK_SRC				388
+#define GCC_USB4_2_PHY_SYS_CLK_SRC				389
+#define GCC_QSPI_CNOC_PERIPH_AHB_CLK				390
+#define GCC_QSPI_CORE_CLK_SRC					391
+#define GCC_QSPI_CORE_CLK					392
+#define GCC_HLOS1_VOTE_MMU_TCU_CLK				393
 
 /* GCC power domains */
 #define GCC_PCIE_0_TUNNEL_GDSC					0
@@ -392,6 +430,7 @@
 #define GCC_USB_0_PHY_GDSC					24
 #define GCC_USB_1_PHY_GDSC					25
 #define GCC_USB_2_PHY_GDSC					26
+#define GCC_HLOS1_VOTE_MMU_TCU_GDS				27
 
 /* GCC resets */
 #define GCC_AV1E_BCR						0
@@ -482,4 +521,8 @@
 #define GCC_USB_1_PHY_BCR					85
 #define GCC_USB_2_PHY_BCR					86
 #define GCC_VIDEO_BCR						87
+#define GCC_VIDEO_AXI0_CLK_ARES					88
+#define GCC_VIDEO_AXI1_CLK_ARES					89
+#define GCC_QSPI_BCR						90
+
 #endif

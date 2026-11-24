@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ */
+
 #include <linux/acpi.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
@@ -8,9 +12,12 @@
 #include <linux/of_platform.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
+#include <linux/virtio.h>
+#include <linux/virtio_config.h>
+#include <linux/virtio_ids.h>
 
 #include "arm-smmu-v3.h"
-#include "../../dma-iommu.h"
+#include "drivers/iommu/dma-iommu.h"
 
 struct arm_smmu_option_prop {
 	u32 opt;
@@ -140,7 +147,7 @@ static inline int arm_smmu_device_acpi_probe(struct platform_device *pdev,
 }
 #endif
 
-static int arm_smmu_device_dt_probe(struct platform_device *pdev,
+int arm_smmu_device_dt_probe(struct platform_device *pdev,
 				    struct arm_smmu_device *smmu)
 {
 	struct device *dev = &pdev->dev;
@@ -180,7 +187,10 @@ static void arm_smmu_device_iidr_probe(struct arm_smmu_device *smmu)
 	u32 reg;
 	unsigned int implementer, productid, variant, revision;
 
-	reg = readl_relaxed(smmu->base + ARM_SMMU_IIDR);
+	if (smmu->impl_ops && smmu->impl_ops->read_idr)
+		reg = smmu->impl_ops->read_idr(smmu, ARM_SMMU_IIDR);
+	else
+		reg = readl_relaxed(smmu->base + ARM_SMMU_IIDR);
 	implementer = FIELD_GET(IIDR_IMPLEMENTER, reg);
 	productid = FIELD_GET(IIDR_PRODUCTID, reg);
 	variant = FIELD_GET(IIDR_VARIANT, reg);
@@ -237,59 +247,21 @@ int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 	bool coherent = smmu->features & ARM_SMMU_FEAT_COHERENCY;
 
 	/* IDR0 */
-	reg = readl_relaxed(smmu->base + ARM_SMMU_IDR0);
+	if (smmu->impl_ops && smmu->impl_ops->read_idr)
+		reg = smmu->impl_ops->read_idr(smmu, ARM_SMMU_IDR0);
+	else
+		reg = readl_relaxed(smmu->base + ARM_SMMU_IDR0);
 
-	/* 2-level structures */
-	if (FIELD_GET(IDR0_ST_LVL, reg) == IDR0_ST_LVL_2LVL)
-		smmu->features |= ARM_SMMU_FEAT_2_LVL_STRTAB;
-
-	if (reg & IDR0_CD2L)
-		smmu->features |= ARM_SMMU_FEAT_2_LVL_CDTAB;
-
-	/*
-	 * Translation table endianness.
-	 * We currently require the same endianness as the CPU, but this
-	 * could be changed later by adding a new IO_PGTABLE_QUIRK.
-	 */
-	switch (FIELD_GET(IDR0_TTENDIAN, reg)) {
-	case IDR0_TTENDIAN_MIXED:
-		smmu->features |= ARM_SMMU_FEAT_TT_LE | ARM_SMMU_FEAT_TT_BE;
-		break;
-#ifdef __BIG_ENDIAN
-	case IDR0_TTENDIAN_BE:
-		smmu->features |= ARM_SMMU_FEAT_TT_BE;
-		break;
-#else
-	case IDR0_TTENDIAN_LE:
-		smmu->features |= ARM_SMMU_FEAT_TT_LE;
-		break;
-#endif
-	default:
+	smmu->features |= smmu_idr0_features(reg);
+	if (FIELD_GET(IDR0_TTENDIAN, reg) == IDR0_TTENDIAN_RESERVED) {
 		dev_err(smmu->dev, "unknown/unsupported TT endianness!\n");
 		return -ENXIO;
 	}
-
-	/* Boolean feature flags */
-	if (IS_ENABLED(CONFIG_PCI_PRI) && reg & IDR0_PRI)
-		smmu->features |= ARM_SMMU_FEAT_PRI;
-
-	if (IS_ENABLED(CONFIG_PCI_ATS) && reg & IDR0_ATS)
-		smmu->features |= ARM_SMMU_FEAT_ATS;
-
-	if (reg & IDR0_SEV)
-		smmu->features |= ARM_SMMU_FEAT_SEV;
-
-	if (reg & IDR0_MSI) {
-		smmu->features |= ARM_SMMU_FEAT_MSI;
-		if (coherent)
-			smmu->options |= ARM_SMMU_OPT_MSIPOLL;
-	}
-
-	if (reg & IDR0_HYP) {
-		smmu->features |= ARM_SMMU_FEAT_HYP;
-		if (cpus_have_cap(ARM64_HAS_VIRT_HOST_EXTN))
-			smmu->features |= ARM_SMMU_FEAT_E2H;
-	}
+	if (coherent && smmu->features & ARM_SMMU_FEAT_MSI)
+		smmu->options |= ARM_SMMU_OPT_MSIPOLL;
+	if (smmu->features & ARM_SMMU_FEAT_HYP &&
+	    cpus_have_cap(ARM64_HAS_VIRT_HOST_EXTN))
+		smmu->features |= ARM_SMMU_FEAT_E2H;
 
 	arm_smmu_get_httu(smmu, reg);
 
@@ -301,21 +273,7 @@ int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 		dev_warn(smmu->dev, "IDR0.COHACC overridden by FW configuration (%s)\n",
 			 coherent ? "true" : "false");
 
-	switch (FIELD_GET(IDR0_STALL_MODEL, reg)) {
-	case IDR0_STALL_MODEL_FORCE:
-		smmu->features |= ARM_SMMU_FEAT_STALL_FORCE;
-		fallthrough;
-	case IDR0_STALL_MODEL_STALL:
-		smmu->features |= ARM_SMMU_FEAT_STALLS;
-	}
-
-	if (reg & IDR0_S1P)
-		smmu->features |= ARM_SMMU_FEAT_TRANS_S1;
-
-	if (reg & IDR0_S2P)
-		smmu->features |= ARM_SMMU_FEAT_TRANS_S2;
-
-	if (!(reg & (IDR0_S1P | IDR0_S2P))) {
+	if (!(smmu->features & (ARM_SMMU_FEAT_TRANS_S1 | ARM_SMMU_FEAT_TRANS_S2))) {
 		dev_err(smmu->dev, "no translation support!\n");
 		return -ENXIO;
 	}
@@ -337,7 +295,10 @@ int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 	smmu->vmid_bits = reg & IDR0_VMID16 ? 16 : 8;
 
 	/* IDR1 */
-	reg = readl_relaxed(smmu->base + ARM_SMMU_IDR1);
+	if (smmu->impl_ops && smmu->impl_ops->read_idr)
+		reg = smmu->impl_ops->read_idr(smmu, ARM_SMMU_IDR1);
+	else
+		reg = readl_relaxed(smmu->base + ARM_SMMU_IDR1);
 	if (reg & (IDR1_TABLES_PRESET | IDR1_QUEUES_PRESET | IDR1_REL)) {
 		dev_err(smmu->dev, "embedded implementation not supported\n");
 		return -ENXIO;
@@ -379,54 +340,33 @@ int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 		smmu->features &= ~ARM_SMMU_FEAT_2_LVL_STRTAB;
 
 	/* IDR3 */
-	reg = readl_relaxed(smmu->base + ARM_SMMU_IDR3);
-	if (FIELD_GET(IDR3_RIL, reg))
-		smmu->features |= ARM_SMMU_FEAT_RANGE_INV;
+	if (smmu->impl_ops && smmu->impl_ops->read_idr)
+		reg = smmu->impl_ops->read_idr(smmu, ARM_SMMU_IDR3);
+	else
+		reg = readl_relaxed(smmu->base + ARM_SMMU_IDR3);
+	smmu->features |= smmu_idr3_features(reg);
 
 	/* IDR5 */
-	reg = readl_relaxed(smmu->base + ARM_SMMU_IDR5);
-
+	if (smmu->impl_ops && smmu->impl_ops->read_idr)
+		reg = smmu->impl_ops->read_idr(smmu, ARM_SMMU_IDR5);
+	else
+		reg = readl_relaxed(smmu->base + ARM_SMMU_IDR5);
 	/* Maximum number of outstanding stalls */
 	smmu->evtq.max_stalls = FIELD_GET(IDR5_STALL_MAX, reg);
 
 	/* Page sizes */
-	if (reg & IDR5_GRAN64K)
-		smmu->pgsize_bitmap |= SZ_64K | SZ_512M;
-	if (reg & IDR5_GRAN16K)
-		smmu->pgsize_bitmap |= SZ_16K | SZ_32M;
-	if (reg & IDR5_GRAN4K)
-		smmu->pgsize_bitmap |= SZ_4K | SZ_2M | SZ_1G;
+	smmu->pgsize_bitmap = smmu_idr5_to_pgsize(reg);
 
 	/* Input address size */
 	if (FIELD_GET(IDR5_VAX, reg) == IDR5_VAX_52_BIT)
 		smmu->features |= ARM_SMMU_FEAT_VAX;
 
-	/* Output address size */
-	switch (FIELD_GET(IDR5_OAS, reg)) {
-	case IDR5_OAS_32_BIT:
-		smmu->oas = 32;
-		break;
-	case IDR5_OAS_36_BIT:
-		smmu->oas = 36;
-		break;
-	case IDR5_OAS_40_BIT:
-		smmu->oas = 40;
-		break;
-	case IDR5_OAS_42_BIT:
-		smmu->oas = 42;
-		break;
-	case IDR5_OAS_44_BIT:
-		smmu->oas = 44;
-		break;
-	case IDR5_OAS_52_BIT:
-		smmu->oas = 52;
+	smmu->oas = smmu_idr5_to_oas(reg);
+	if (smmu->oas == 52)
 		smmu->pgsize_bitmap |= 1ULL << 42; /* 4TB */
-		break;
-	default:
+	else if (!smmu->oas) {
 		dev_info(smmu->dev,
-			"unknown output address size. Truncating to 48-bit\n");
-		fallthrough;
-	case IDR5_OAS_48_BIT:
+			 "unknown output address size. Truncating to 48-bit\n");
 		smmu->oas = 48;
 	}
 
@@ -442,6 +382,9 @@ int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 		smmu->features |= ARM_SMMU_FEAT_NESTING;
 
 	arm_smmu_device_iidr_probe(smmu);
+
+	if (arm_smmu_sva_supported(smmu))
+		smmu->features |= ARM_SMMU_FEAT_SVA;
 
 	dev_info(smmu->dev, "ias %lu-bit, oas %lu-bit (features 0x%08x)\n",
 		 smmu->ias, smmu->oas, smmu->features);
@@ -497,7 +440,8 @@ struct iommu_group *arm_smmu_device_group(struct device *dev)
 
 	/*
 	 * We don't support devices sharing stream IDs other than PCI RID
-	pick f473c7c1b189 fixup drv splt * aliases, since the necessary ID-to-device lookup becomes rather
+	 * pick f473c7c1b189 fixup drv splt * aliases, since the necessary
+	 * ID-to-device lookup becomes rather
 	 * impractical given a potential sparse 32-bit stream ID space.
 	 */
 	if (dev_is_pci(dev))

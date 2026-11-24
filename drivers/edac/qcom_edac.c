@@ -11,8 +11,8 @@
 #include <linux/regmap.h>
 #include <linux/soc/qcom/llcc-qcom.h>
 
-#include "edac_mc.h"
-#include "edac_device.h"
+#include "drivers/edac/edac_mc.h"
+#include "drivers/edac/edac_device.h"
 
 #define EDAC_LLCC                       "qcom_llcc"
 
@@ -342,11 +342,9 @@ static int qcom_llcc_edac_probe(struct platform_device *pdev)
 	int ecc_irq;
 	int rc;
 
-	if (!llcc_driv_data->ecc_irq_configured) {
-		rc = qcom_llcc_core_setup(llcc_driv_data, llcc_driv_data->bcast_regmap);
-		if (rc)
-			return rc;
-	}
+	rc = qcom_llcc_core_setup(llcc_driv_data, llcc_driv_data->bcast_regmap);
+	if (rc)
+		return rc;
 
 	/* Allocate edac control info */
 	edev_ctl = edac_device_alloc_ctl_info(0, "qcom-llcc", 1, "bank",

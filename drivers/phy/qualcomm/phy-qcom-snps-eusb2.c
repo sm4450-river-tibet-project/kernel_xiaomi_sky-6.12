@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2023, Linaro Limited
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/bitfield.h>
@@ -126,6 +126,7 @@ struct qcom_snps_eusb2_hsphy {
 	void __iomem *base;
 
 	struct clk *ref_clk;
+	struct clk *ref_clk_src;
 	struct reset_control *phy_reset;
 
 	struct regulator_bulk_data vregs[EUSB2_NUM_VREGS];
@@ -188,7 +189,7 @@ static void qcom_eusb2_default_parameters(struct qcom_snps_eusb2_hsphy *phy)
 
 static int qcom_eusb2_ref_clk_init(struct qcom_snps_eusb2_hsphy *phy)
 {
-	unsigned long ref_clk_freq = clk_get_rate(phy->ref_clk);
+	unsigned long ref_clk_freq = clk_get_rate(phy->ref_clk_src);
 
 	switch (ref_clk_freq) {
 	case 19200000:
@@ -364,6 +365,38 @@ static const struct phy_ops qcom_snps_eusb2_hsphy_ops = {
 	.owner		= THIS_MODULE,
 };
 
+static int qcom_snps_eusb2_hsphy_runtime_suspend(struct device *dev)
+{
+	struct qcom_snps_eusb2_hsphy *phy = dev_get_drvdata(dev);
+
+	dev_dbg(dev, "Suspending qcom_snps_eusb2_hsphy\n");
+
+	clk_disable_unprepare(phy->ref_clk);
+
+	return 0;
+}
+
+static int qcom_snps_eusb2_hsphy_runtime_resume(struct device *dev)
+{
+	struct qcom_snps_eusb2_hsphy *phy = dev_get_drvdata(dev);
+	int ret;
+
+	dev_dbg(dev, "Resuming qcom_snps_eusb2_hsphy\n");
+
+	ret = clk_prepare_enable(phy->ref_clk);
+	if (ret) {
+		dev_err(dev, "failed to enable ref clock, %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static const struct dev_pm_ops qcom_snps_eusb2_hsphy_pm_ops = {
+	SET_RUNTIME_PM_OPS(qcom_snps_eusb2_hsphy_runtime_suspend,
+			   qcom_snps_eusb2_hsphy_runtime_resume, NULL)
+};
+
 static int qcom_snps_eusb2_hsphy_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -386,6 +419,11 @@ static int qcom_snps_eusb2_hsphy_probe(struct platform_device *pdev)
 	if (IS_ERR(phy->phy_reset))
 		return PTR_ERR(phy->phy_reset);
 
+	phy->ref_clk_src = devm_clk_get(dev, "ref_clk_src");
+	if (IS_ERR(phy->ref_clk_src))
+		return dev_err_probe(dev, PTR_ERR(phy->ref_clk_src),
+				     "failed to get ref clk src\n");
+
 	phy->ref_clk = devm_clk_get(dev, "ref");
 	if (IS_ERR(phy->ref_clk))
 		return dev_err_probe(dev, PTR_ERR(phy->ref_clk),
@@ -400,7 +438,7 @@ static int qcom_snps_eusb2_hsphy_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "failed to get regulator supplies\n");
 
-	phy->repeater = devm_of_phy_get_by_index(dev, np, 0);
+	phy->repeater = devm_of_phy_optional_get(dev, np, 0);
 	if (IS_ERR(phy->repeater))
 		return dev_err_probe(dev, PTR_ERR(phy->repeater),
 				     "failed to get repeater\n");
@@ -413,6 +451,7 @@ static int qcom_snps_eusb2_hsphy_probe(struct platform_device *pdev)
 
 	dev_set_drvdata(dev, phy);
 	phy_set_drvdata(generic_phy, phy);
+	pm_runtime_enable(dev);
 
 	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
 	if (IS_ERR(phy_provider))
@@ -433,6 +472,7 @@ static struct platform_driver qcom_snps_eusb2_hsphy_driver = {
 	.probe		= qcom_snps_eusb2_hsphy_probe,
 	.driver = {
 		.name	= "qcom-snps-eusb2-hsphy",
+		.pm	= &qcom_snps_eusb2_hsphy_pm_ops,
 		.of_match_table = qcom_snps_eusb2_hsphy_of_match_table,
 	},
 };

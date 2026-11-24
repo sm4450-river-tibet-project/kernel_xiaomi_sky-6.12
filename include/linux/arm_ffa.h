@@ -128,7 +128,6 @@
 #define FFA_FEAT_RXTX_MIN_SZ_4K		0
 #define FFA_FEAT_RXTX_MIN_SZ_64K	1
 #define FFA_FEAT_RXTX_MIN_SZ_16K	2
-#define FFA_FEAT_RXTX_MIN_SZ_MASK	GENMASK(1, 0)
 
 /* FFA Bus/Device/Driver related */
 struct ffa_device {
@@ -178,6 +177,7 @@ void ffa_device_unregister(struct ffa_device *ffa_dev);
 int ffa_driver_register(struct ffa_driver *driver, struct module *owner,
 			const char *mod_name);
 void ffa_driver_unregister(struct ffa_driver *driver);
+void ffa_devices_unregister(void);
 bool ffa_device_is_valid(struct ffa_device *ffa_dev);
 
 #else
@@ -189,6 +189,8 @@ ffa_device_register(const struct ffa_partition_info *part_info,
 }
 
 static inline void ffa_device_unregister(struct ffa_device *dev) {}
+
+static inline void ffa_devices_unregister(void) {}
 
 static inline int
 ffa_driver_register(struct ffa_driver *driver, struct module *owner,
@@ -240,18 +242,11 @@ struct ffa_partition_info {
 #define FFA_PARTITION_INDIRECT_MSG	BIT(2)
 /* partition can receive notifications */
 #define FFA_PARTITION_NOTIFICATION_RECV	BIT(3)
-/* partition must be informed about each VM that is created by the Hypervisor */
-#define FFA_PARTITION_HYP_CREATE_VM	BIT(6)
-/* partition must be informed about each VM that is destroyed by the Hypervisor */
-#define FFA_PARTITION_HYP_DESTROY_VM	BIT(7)
 /* partition runs in the AArch64 execution state. */
 #define FFA_PARTITION_AARCH64_EXEC	BIT(8)
 	u32 properties;
-	u32 uuid[4];
+	uuid_t uuid;
 };
-
-#define FFA_VM_CREATION_MSG	(BIT(31) | (BIT(2)))
-#define FFA_VM_DESTRUCTION_MSG  (FFA_VM_CREATION_MSG | BIT(1))
 
 static inline
 bool ffa_partition_check_property(struct ffa_device *dev, u32 property)
@@ -268,8 +263,6 @@ bool ffa_partition_check_property(struct ffa_device *dev, u32 property)
 #define ffa_partition_supports_direct_recv(dev)	\
 	ffa_partition_check_property(dev, FFA_PARTITION_DIRECT_RECV)
 
-#define FFA_SRC_ENDPOINT_MASK	GENMASK(31, 16)
-
 /* For use with FFA_MSG_SEND_DIRECT_{REQ,RESP} which pass data via registers */
 struct ffa_send_direct_data {
 	unsigned long data0; /* w3/x3 */
@@ -285,6 +278,7 @@ struct ffa_indirect_msg_hdr {
 	u32 offset;
 	u32 send_recv_id;
 	u32 size;
+	uuid_t uuid;
 };
 
 /* For use with FFA_MSG_SEND_DIRECT_{REQ,RESP}2 which pass data via registers */
@@ -337,6 +331,7 @@ struct ffa_mem_region_attributes {
 	 * an `struct ffa_mem_region_addr_range`.
 	 */
 	u32 composite_off;
+	u8 impdef_val[16];
 	u64 reserved;
 };
 
@@ -416,15 +411,31 @@ struct ffa_mem_region {
 #define CONSTITUENTS_OFFSET(x)	\
 	(offsetof(struct ffa_composite_mem_region, constituents[x]))
 
+#define FFA_EMAD_HAS_IMPDEF_FIELD(version)	((version) >= FFA_VERSION_1_2)
+#define FFA_MEM_REGION_HAS_EP_MEM_OFFSET(version) ((version) > FFA_VERSION_1_0)
+
+static inline u32 ffa_emad_size_get(u32 ffa_version)
+{
+	u32 sz;
+	struct ffa_mem_region_attributes *ep_mem_access;
+
+	if (FFA_EMAD_HAS_IMPDEF_FIELD(ffa_version))
+		sz = sizeof(*ep_mem_access);
+	else
+		sz = sizeof(*ep_mem_access) - sizeof(ep_mem_access->impdef_val);
+
+	return sz;
+}
+
 static inline u32
 ffa_mem_desc_offset(struct ffa_mem_region *buf, int count, u32 ffa_version)
 {
-	u32 offset = count * sizeof(struct ffa_mem_region_attributes);
+	u32 offset = count * ffa_emad_size_get(ffa_version);
 	/*
 	 * Earlier to v1.1, the endpoint memory descriptor array started at
 	 * offset 32(i.e. offset of ep_mem_offset in the current structure)
 	 */
-	if (ffa_version <= FFA_VERSION_1_0)
+	if (!FFA_MEM_REGION_HAS_EP_MEM_OFFSET(ffa_version))
 		offset += offsetof(struct ffa_mem_region, ep_mem_offset);
 	else
 		offset += sizeof(struct ffa_mem_region);
@@ -453,7 +464,7 @@ struct ffa_msg_ops {
 	int (*sync_send_receive)(struct ffa_device *dev,
 				 struct ffa_send_direct_data *data);
 	int (*indirect_send)(struct ffa_device *dev, void *buf, size_t sz);
-	int (*sync_send_receive2)(struct ffa_device *dev, const uuid_t *uuid,
+	int (*sync_send_receive2)(struct ffa_device *dev,
 				  struct ffa_send_direct_data2 *data);
 };
 
@@ -469,6 +480,7 @@ struct ffa_cpu_ops {
 
 typedef void (*ffa_sched_recv_cb)(u16 vcpu, bool is_per_vcpu, void *cb_data);
 typedef void (*ffa_notifier_cb)(int notify_id, void *cb_data);
+typedef void (*ffa_fwk_notifier_cb)(int notify_id, void *cb_data, void *buf);
 
 struct ffa_notifier_ops {
 	int (*sched_recv_cb_register)(struct ffa_device *dev,
@@ -477,6 +489,10 @@ struct ffa_notifier_ops {
 	int (*notify_request)(struct ffa_device *dev, bool per_vcpu,
 			      ffa_notifier_cb cb, void *cb_data, int notify_id);
 	int (*notify_relinquish)(struct ffa_device *dev, int notify_id);
+	int (*fwk_notify_request)(struct ffa_device *dev,
+				  ffa_fwk_notifier_cb cb, void *cb_data,
+				  int notify_id);
+	int (*fwk_notify_relinquish)(struct ffa_device *dev, int notify_id);
 	int (*notify_send)(struct ffa_device *dev, int notify_id, bool per_vcpu,
 			   u16 vcpu);
 };
@@ -511,16 +527,6 @@ static inline int ffa_to_linux_errno(int errno)
 	if (err_idx >= 0 && err_idx < ARRAY_SIZE(ffa_linux_errmap))
 		return ffa_linux_errmap[err_idx];
 	return -EINVAL;
-}
-
-static inline int linux_errno_to_ffa(int errno)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(ffa_linux_errmap); i++)
-		if (ffa_linux_errmap[i] == errno)
-			return -i;
-	return FFA_RET_NOT_SUPPORTED;
 }
 
 #endif /* _LINUX_ARM_FFA_H */
