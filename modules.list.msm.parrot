@@ -84,7 +84,7 @@ pm8941-pwrkey.ko
 i2c-msm-geni.ko
 qcom-pon.ko
 reboot-mode.ko
-qti_battery_charger.ko
+qti-battery-charger.ko
 qcom-spmi-adc-tm5.ko
 qcom-spmi-temp-alarm.ko
 qti_qmi_sensor_v2.ko
