@@ -440,6 +440,34 @@ if os.path.exists(p) and os.path.exists(ack):
         print("scripts/Makefile.modfinal: already ACK's")
 EOF
 
+# rust/bindings/lib.rs is a pure type crate: every item is a repr or a type
+# alias, so rustc emits an object with no .text and no .debug_info.
+# gendwarfksyms (CONFIG_MODVERSIONS + CONFIG_GENDWARFKSYMS) walks every CU
+# with dwarf_get_units() and hard-errors on a module without debug info:
+#   gendwarfksyms: process_module: dwarf_get_units failed: no debugging information?
+# bindings.o carries zero global symbols, so there is nothing to version.
+# Every other Rust object in rust/Makefile already sets skip_gendwarfksyms = 1
+# for the same class of reason; bindings.o was simply missed.
+python3 - <<'EOF'
+import os
+p = "rust/Makefile"
+if os.path.exists(p):
+    t = open(p, encoding="utf-8", errors="surrogateescape").read()
+    if "bindings.o: private skip_gendwarfksyms" not in t:
+        old = "$(obj)/bindings.o: private rustc_target_flags = --extern ffi"
+        if old in t:
+            t = t.replace(old,
+                          "$(obj)/bindings.o: private skip_gendwarfksyms = 1\n" + old,
+                          1)
+            open(p, "w", encoding="utf-8",
+                 errors="surrogateescape").write(t)
+            print("rust/Makefile: bindings.o skip_gendwarfksyms=1")
+        else:
+            print("rust/Makefile: bindings.o anchor not found")
+    else:
+        print("rust/Makefile: bindings.o already skipped")
+EOF
+
 # kernel/sched/walt is builtin (CONFIG_SCHED_WALT=y) and walt_config.c calls
 # socinfo_get_id_string(), which lives in the QCOM_SOCINFO module.  Builtin
 # code cannot reference a module's exports, so vmlinux links with the symbol
