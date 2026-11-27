@@ -120,6 +120,11 @@ config VIRTIO_BALLOON
 
 	 If unsure, say M.
 
+config VIRTIO_BALLOON_HYP_OPS
+	def_bool y
+	depends on VIRTIO_BALLOON
+	depends on ARCH_HAS_VIRTIO_BALLOON_HYP_OPS
+
 config VIRTIO_MEM
 	tristate "Virtio mem driver"
 	depends on X86_64 || ARM64 || RISCV
@@ -160,6 +165,37 @@ config VIRTIO_MMIO
 
  	 If unsure, say N.
 
+config VIRTIO_MMIO_CMDLINE_DEVICES
+	bool "Memory mapped virtio devices parameter parsing"
+	depends on VIRTIO_MMIO
+	help
+	 Allow virtio-mmio devices instantiation via the kernel command line
+	 or module parameters. Be aware that using incorrect parameters (base
+	 address in particular) can crash your system - you have been warned.
+	 See Documentation/admin-guide/kernel-parameters.rst for details.
+
+	 If unsure, say 'N'.
+
+config VIRTIO_DMA_SHARED_BUFFER
+	tristate "Virtio DMA shared buffer support"
+	depends on DMA_SHARED_BUFFER
+	help
+	 This option adds a flavor of dma buffers that are backed by
+	 virtio resources.
+
+config VIRTIO_DEBUG
+	bool "Debug facilities"
+	depends on VIRTIO
+	help
+	  Enable this to expose debug facilities over debugfs.
+	  This allows to debug features, to see what features the device
+	  advertises and to set filter for features used by driver.
+
+	  If unsure, say N.
+
+endif # VIRTIO_MENU
+
+# --- CLO soc-repo overlay additions (restored by fix_kbuild.py) ---
 config VIRTIO_MMIO_SWIOTLB
 	bool "Instantiate swiotlb buffer pool for custom DMA ops"
 	depends on VIRTIO_MMIO
@@ -181,24 +217,6 @@ config GH_VIRTIO_DEBUG
 	  Currently virtio block driver and mmio transport provide few
 	  tracepoints when this feature is enabled.
 
-config VIRTIO_MMIO_CMDLINE_DEVICES
-	bool "Memory mapped virtio devices parameter parsing"
-	depends on VIRTIO_MMIO
-	help
-	 Allow virtio-mmio devices instantiation via the kernel command line
-	 or module parameters. Be aware that using incorrect parameters (base
-	 address in particular) can crash your system - you have been warned.
-	 See Documentation/admin-guide/kernel-parameters.rst for details.
-
-	 If unsure, say 'N'.
-
-config VIRTIO_DMA_SHARED_BUFFER
-	tristate "Virtio DMA shared buffer support"
-	depends on DMA_SHARED_BUFFER
-	help
-	 This option adds a flavor of dma buffers that are backed by
-	 virtio resources.
-
 config VIRTIO_MMIO_POLL_RESET
 	bool "Virti-mmio device synchronous reset support"
 	depends on VIRTIO_MMIO
@@ -208,4 +226,3 @@ config VIRTIO_MMIO_POLL_RESET
 	  wait for a read of device_status to return 0 before reinitializing
 	  the device.
 
-endif # VIRTIO_MENU

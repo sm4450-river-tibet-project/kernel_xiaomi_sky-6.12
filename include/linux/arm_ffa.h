@@ -529,4 +529,25 @@ static inline int ffa_to_linux_errno(int errno)
 	return -EINVAL;
 }
 
+/* restored by fix_headers.py: CLO overlay dropped it, but the
+ * .c files in this tree are ACK's and still call it */
+static inline int linux_errno_to_ffa(int errno)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(ffa_linux_errmap); i++)
+		if (ffa_linux_errmap[i] == errno)
+			return -i;
+	return FFA_RET_NOT_SUPPORTED;
+}
+
 #endif /* _LINUX_ARM_FFA_H */
+
+/* ACK symbols restored by fix_headers.py (CLO overlay dropped
+ * them while the .c files here are ACK's) */
+#define FFA_FEAT_RXTX_MIN_SZ_MASK	GENMASK(1, 0)
+#define FFA_PARTITION_HYP_CREATE_VM	BIT(6)
+#define FFA_PARTITION_HYP_DESTROY_VM	BIT(7)
+#define FFA_VM_CREATION_MSG	(BIT(31) | (BIT(2)))
+#define FFA_VM_DESTRUCTION_MSG  (FFA_VM_CREATION_MSG | BIT(1))
+#define FFA_SRC_ENDPOINT_MASK	GENMASK(31, 16)

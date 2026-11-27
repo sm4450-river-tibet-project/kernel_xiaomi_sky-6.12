@@ -10,6 +10,17 @@ config QCOM_TSENS
 	  Also able to set threshold temperature for both hot and cold and update
 	  when a threshold is reached.
 
+config QCOM_SPMI_ADC_TM5
+	tristate "Qualcomm SPMI PMIC Thermal Monitor ADC5"
+	depends on OF && SPMI && IIO
+	select REGMAP_SPMI
+	select QCOM_VADC_COMMON
+	help
+	  This enables the thermal driver for the ADC thermal monitoring
+	  device. It shows up as a thermal zone with multiple trip points.
+	  Thermal client sets threshold temperature for both warm and cool and
+	  gets updated when a threshold is reached.
+
 config QCOM_SPMI_TEMP_ALARM
 	tristate "Qualcomm SPMI PMIC Temperature Alarm"
 	depends on OF && SPMI && IIO
@@ -23,7 +34,7 @@ config QCOM_SPMI_TEMP_ALARM
 
 config QCOM_LMH
 	tristate "Qualcomm Limits Management Hardware"
-	depends on ARCH_QCOM || COMPILE_TEST
+	depends on ARCH_QCOM && QCOM_SCM
 	help
 	  This enables initialization of Qualcomm limits management
 	  hardware(LMh). LMh allows for hardware-enforced mitigation for cpus based on
@@ -31,6 +42,7 @@ config QCOM_LMH
 	  LMh is configured in the firmware and this feature need not be enabled.
 	  However, on certain SoCs like sdm845 LMh has to be configured from kernel.
 
+# --- CLO soc-repo overlay additions (restored by fix_kbuild.py) ---
 config QTI_QMI_SENSOR_V2
 	tristate "QTI QMI TS V2 sensor driver"
 	depends on THERMAL_OF
@@ -241,17 +253,6 @@ config QTI_THERMAL_LMH_STATS
 	   It monitors limits hardware throttling via scmi perf notification
 	   interface and enables different statistics of hardware throttling
 	   to userspace via sysfs interface.
-
-config QCOM_SPMI_ADC_TM5
-        tristate "Qualcomm SPMI PMIC Thermal Monitor ADC5"
-        depends on OF && SPMI && IIO
-        select REGMAP_SPMI
-        select QCOM_VADC_COMMON
-        help
-           This enables the thermal driver for the ADC thermal monitoring
-           device. It shows up as a thermal zone with multiple trip points.
-           Thermal client sets threshold temperature for both warm and cool and
-           gets updated when a threshold is reached.
 
 config REGULATOR_COOLING_DEVICE
 	tristate "Regulator voltage floor cooling device"

@@ -9,6 +9,8 @@ menuconfig GCC_PLUGINS
 	bool "GCC plugins"
 	depends on HAVE_GCC_PLUGINS
 	depends on CC_IS_GCC
+	# ANDROID: GCC_PLUGINS are broken for 32-bit ARM builds (gcc 12.2.0)
+	depends on !ARM
 	depends on $(success,test -e $(shell,$(CC) -print-file-name=plugin)/include/plugin-version.h)
 	default y
 	help
@@ -51,3 +53,5 @@ config GCC_PLUGIN_ARM_SSP_PER_TASK
 	depends on GCC_PLUGINS && ARM
 
 endif
+
+# --- CLO soc-repo overlay additions (restored by fix_kbuild.py) ---

@@ -6,8 +6,6 @@
 
 menu "Firmware Drivers"
 
-source "$(KCONFIG_EXT_PREFIX)drivers/firmware/arm_scmi/Kconfig"
-source "$(KCONFIG_EXT_PREFIX)drivers/firmware/qcom/Kconfig"
 
 config ARM_FFA_TRANSPORT
 	tristate "Arm Firmware Framework for Armv8-A"

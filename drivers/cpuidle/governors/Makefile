@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Makefile for cpuidle governors.
+#
+
+obj-$(CONFIG_CPU_IDLE_GOV_LADDER) += ladder.o
+obj-$(CONFIG_CPU_IDLE_GOV_MENU) += menu.o
+obj-$(CONFIG_CPU_IDLE_GOV_TEO) += teo.o
+obj-$(CONFIG_CPU_IDLE_GOV_HALTPOLL) += haltpoll.o
+
+# --- CLO soc-repo overlay additions (restored by fix_kbuild.py) ---
 # SPDX-License-Identifier: GPL-2.0
 
 ccflags-y += -I$(src)
